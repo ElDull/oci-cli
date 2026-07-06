@@ -1,18 +1,48 @@
-Oracle Cloud Infrastructure CLI
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Oracle Cloud Infrastructure CLI (Fork)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Fork Features
+=============
+
+This fork extends the official OCI CLI with features for security research and offensive testing:
+
+New Authentication Methods
+--------------------------
+
+* **instance_principal_from_files** — Uses the same X.509 token exchange as instance principal, but reads the instance identity certificate and key from local files (e.g. exfiltrated from an OCI compute instance). See ``INSTANCE_PRINCIPAL_FROM_FILES.md``.
+* **signed_jwt** — Authenticates using a pre-obtained JWT token file, optionally with a session key for request signing.
+
+New Commands
+------------
+
+* ``oci whoami`` — Shows proof of caller identity: decodes session token claims for token-based auth, or displays user/tenancy info for API key auth.
+* ``oci setup create-profile-from-identity`` — Creates a ready-to-use OCI config profile from instance identity cert/key files.
+
+Proxy Support
+-------------
+
+* ``--proxy`` now routes both HTTP and HTTPS through the same proxy (useful for intercepting with Burp Suite).
+* New ``OCI_CLI_PROXY`` environment variable sets the proxy without needing ``--proxy`` on every command.
+
+Utility Scripts
+---------------
+
+* ``scripts/pull_instance_identity.py`` — Pulls instance identity cert/key from a running OCI instance via SSH.
+* ``scripts/oci_signer_from_local_files.py`` — Standalone library to create an OCI request signer from local cert/key files.
+* ``scripts/oci_request_with_instance_token.py`` — Enumeration script using instance principal (users, groups, privileges).
+
+Installation
+------------
+
+See ``INSTALL.md`` for options (``make install``, ``make venv``, ``pipx install -e .``).
+
+----
 
 About
 =====
 This is the command line interface for Oracle Cloud Infrastructure.
 
 The project is open source and maintained by Oracle Corp. The home page for the project is `here`__.
-
-This fork adds extra authentication methods: **instance_principal_from_files** and **signed_jwt**, which
-use the same X.509 token flow as instance principal but read the instance identity certificate and key
-from local files. See ``INSTANCE_PRINCIPAL_FROM_FILES.md`` for setup and usage.
-
-To install so that the ``oci`` command is on your PATH, see **INSTALL.md** (e.g. ``make install``,
-``make venv``, or ``pipx install -e .``).
 
 __ https://docs.cloud.oracle.com/Content/API/Concepts/cliconcepts.htm
 
