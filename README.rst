@@ -7,6 +7,13 @@ This is the command line interface for Oracle Cloud Infrastructure.
 
 The project is open source and maintained by Oracle Corp. The home page for the project is `here`__.
 
+This fork adds extra authentication methods: **instance_principal_from_files** and **signed_jwt**, which
+use the same X.509 token flow as instance principal but read the instance identity certificate and key
+from local files. See ``INSTANCE_PRINCIPAL_FROM_FILES.md`` for setup and usage.
+
+To install so that the ``oci`` command is on your PATH, see **INSTALL.md** (e.g. ``make install``,
+``make venv``, or ``pipx install -e .``).
+
 __ https://docs.cloud.oracle.com/Content/API/Concepts/cliconcepts.htm
 
 Announcements

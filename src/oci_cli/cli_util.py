@@ -312,6 +312,160 @@ def get_instance_principal_signer(ctx, client_config):
     return signer
 
 
+def get_instance_principal_from_files_signer(ctx, client_config):
+    """
+    Build a signer using instance-principal-style X509 token exchange but with
+    certificate and private key read from local files (e.g. copied from an OCI
+    instance metadata). Requires config keys: instance_certificate_file,
+    instance_key_file, region. Optional: intermediate_certificate_file.
+    """
+    from oci.auth import auth_utils
+    from oci.auth.certificate_retriever import FileBasedCertificateRetriever
+    from oci.auth.federation_client import X509FederationClient
+    from oci.auth.session_key_supplier import SessionKeySupplier
+    from oci.auth.signers.security_token_signer import X509FederationClientBasedSecurityTokenSigner
+
+    cert_path = client_config.get('instance_certificate_file')
+    key_path = client_config.get('instance_key_file')
+    region = client_config.get('region')
+    if not cert_path or not key_path:
+        sys.exit(
+            "ERROR: When using --auth {}, config must specify 'instance_certificate_file' and 'instance_key_file' "
+            "in the profile.".format(cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES)
+        )
+    if not region:
+        sys.exit(
+            "ERROR: When using --auth {}, config must specify 'region' in the profile or pass --region."
+            .format(cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES)
+        )
+
+    cert_path = os.path.expanduser(cert_path)
+    key_path = os.path.expanduser(key_path)
+    if not os.path.isfile(cert_path):
+        sys.exit("ERROR: instance_certificate_file not found: {}".format(cert_path))
+    if not os.path.isfile(key_path):
+        sys.exit("ERROR: instance_key_file not found: {}".format(key_path))
+
+    FilePermissionChecker.warn_on_invalid_file_permissions(key_path)
+
+    try:
+        leaf_retriever = FileBasedCertificateRetriever(
+            certificate_file_path=cert_path,
+            private_key_pem_file_path=key_path,
+            passphrase=client_config.get('pass_phrase'),
+        )
+        tenancy_id = auth_utils.get_tenancy_id_from_certificate(
+            leaf_retriever.get_certificate_as_certificate()
+        )
+        intermediate_retrievers = []
+        intermediate_path = client_config.get('intermediate_certificate_file')
+        if intermediate_path:
+            intermediate_path = os.path.expanduser(intermediate_path)
+            if os.path.isfile(intermediate_path):
+                intermediate_retrievers = [
+                    FileBasedCertificateRetriever(certificate_file_path=intermediate_path)
+                ]
+            else:
+                sys.exit("ERROR: intermediate_certificate_file not found: {}".format(intermediate_path))
+
+        session_key_supplier = SessionKeySupplier()
+        federation_endpoint = "{}/v1/x509".format(oci.regions.endpoint_for("auth", region))
+        cert_bundle_verify = ctx.obj.get('cert_bundle')
+        if cert_bundle_verify:
+            cert_bundle_verify = os.path.expanduser(cert_bundle_verify)
+
+        federation_client = X509FederationClient(
+            federation_endpoint=federation_endpoint,
+            tenancy_id=tenancy_id,
+            session_key_supplier=session_key_supplier,
+            leaf_certificate_retriever=leaf_retriever,
+            intermediate_certificate_retrievers=intermediate_retrievers,
+            cert_bundle_verify=cert_bundle_verify,
+        )
+        signer = X509FederationClientBasedSecurityTokenSigner(federation_client=federation_client)
+        signer.tenancy_id = tenancy_id
+        signer.region = region
+        return signer
+    except Exception as e:
+        sys.exit(
+            "ERROR: Failed to create instance principal signer from files: {}. "
+            "Ensure the certificate and key are from an OCI instance identity (e.g. metadata identity/cert.pem and identity/key.pem)."
+            .format(str(e))
+        )
+
+
+_SECURITY_TOKEN_PREFIX = 'ST$'
+
+
+class _BearerTokenSigner(requests.auth.AuthBase):
+    """Auth that sends the OCI security token as Bearer."""
+    def __init__(self, token_string, region):
+        if not token_string.startswith(_SECURITY_TOKEN_PREFIX):
+            token_string = _SECURITY_TOKEN_PREFIX + token_string
+        self.api_key = token_string
+        self.region = region
+
+    def __call__(self, request):
+        import email.utils
+        request.headers['Authorization'] = 'Bearer {}'.format(self.api_key)
+        request.headers.setdefault('date', email.utils.formatdate(usegmt=True))
+        request.headers.setdefault('host', six.moves.urllib.parse.urlparse(request.url).netloc)
+        return request
+
+
+def get_signed_jwt_signer(client_config):
+    """
+    Build a signer from an OCI signed JWT read from a file. Requires config:
+    jwt_token_file, region. Optional: session_key_file.
+    """
+    token_path = client_config.get('jwt_token_file')
+    key_path = client_config.get('session_key_file')
+    region = client_config.get('region')
+    if not token_path:
+        sys.exit(
+            "ERROR: When using --auth {}, config must specify 'jwt_token_file' (path to file containing the JWT)."
+            .format(cli_constants.OCI_CLI_AUTH_SIGNED_JWT)
+        )
+    if not region:
+        sys.exit(
+            "ERROR: When using --auth {}, config must specify 'region' in the profile or pass --region."
+            .format(cli_constants.OCI_CLI_AUTH_SIGNED_JWT)
+        )
+
+    token_path = os.path.expanduser(token_path)
+    if not os.path.isfile(token_path):
+        sys.exit("ERROR: jwt_token_file not found: {}".format(token_path))
+    FilePermissionChecker.warn_on_invalid_file_permissions(token_path)
+
+    with open(token_path, 'r') as f:
+        token = f.read().strip()
+    if token.startswith(_SECURITY_TOKEN_PREFIX):
+        full_token = token
+        token_only = token[len(_SECURITY_TOKEN_PREFIX):]
+    else:
+        full_token = _SECURITY_TOKEN_PREFIX + token
+        token_only = token
+
+    if not key_path:
+        signer = _BearerTokenSigner(full_token, region)
+        return signer
+
+    key_path = os.path.expanduser(key_path)
+    if not os.path.isfile(key_path):
+        sys.exit("ERROR: session_key_file not found: {}".format(key_path))
+    FilePermissionChecker.warn_on_invalid_file_permissions(key_path)
+
+    try:
+        private_key = oci.signer.load_private_key_from_file(key_path, client_config.get('pass_phrase'))
+    except exceptions.MissingPrivateKeyPassphrase:
+        client_config['pass_phrase'] = prompt_for_passphrase()
+        private_key = oci.signer.load_private_key_from_file(key_path, client_config.get('pass_phrase'))
+
+    signer = oci.auth.signers.SecurityTokenSigner(token_only, private_key)
+    signer.region = region
+    return signer
+
+
 def get_session_token_signer(client_config):
     signer = None
     security_token_location = client_config.get('security_token_file')
@@ -364,6 +518,8 @@ def create_config_and_signer_based_on_click_context(ctx):
     session_token_auth = 'auth' in ctx.obj and ctx.obj['auth'] == cli_constants.OCI_CLI_AUTH_SESSION_TOKEN
     delegation_token_auth = 'auth' in ctx.obj and ctx.obj['auth'] == cli_constants.OCI_CLI_AUTH_INSTANCE_OBO_USER
     oke_workload_identity_auth = 'auth' in ctx.obj and ctx.obj['auth'] == cli_constants.OCI_CLI_AUTH_OKE_WORKLOAD_IDENTITY
+    instance_principal_from_files_auth = 'auth' in ctx.obj and ctx.obj['auth'] == cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES
+    signed_jwt_auth = 'auth' in ctx.obj and ctx.obj['auth'] == cli_constants.OCI_CLI_AUTH_SIGNED_JWT
 
     signer = None
     kwargs = {}
@@ -454,6 +610,18 @@ def create_config_and_signer_based_on_click_context(ctx):
         service_account_token = os.environ.get(cli_constants.OCI_KUBERNETES_SERVICE_ACCOUNT_TOKEN_STRING_ENV_VAR, None)
 
         signer = oci.auth.signers.get_oke_workload_identity_resource_principal_signer(service_account_token_path=service_account_token_path, service_account_token=service_account_token)
+    elif instance_principal_from_files_auth:
+        if ctx.obj['region']:
+            client_config['region'] = ctx.obj['region']
+        if ctx.obj['debug']:
+            logger.debug("auth: instance_principal_from_files")
+        signer = get_instance_principal_from_files_signer(ctx, client_config)
+    elif signed_jwt_auth:
+        if ctx.obj['region']:
+            client_config['region'] = ctx.obj['region']
+        if ctx.obj['debug']:
+            logger.debug("auth: signed_jwt")
+        signer = get_signed_jwt_signer(client_config)
     kwargs['signer'] = signer
 
     try:
@@ -469,7 +637,7 @@ def create_config_and_signer_based_on_click_context(ctx):
             errors=table
         ))
 
-    return ConfigAndSigner(config=client_config, signer=signer, uses_instance_principals_auth=instance_principal_auth)
+    return ConfigAndSigner(config=client_config, signer=signer, uses_instance_principals_auth=(instance_principal_auth or instance_principal_from_files_auth or signed_jwt_auth))
 
 
 def set_request_session_properties_from_context(session, ctx, uses_ssl=True):
@@ -483,16 +651,13 @@ def set_request_session_properties_from_context(session, ctx, uses_ssl=True):
         session.verify = cert_bundle
 
     if ctx.obj.get('settings', {}).get('proxy') or ctx.obj.get('proxy') is not None:
-        # If the proxy is specified explicitly on the command line then use that, otherwise use
-        # the one from the cli_rc_file
+        # If the proxy is specified explicitly on the command line (or OCI_CLI_PROXY) then use that, otherwise use
+        # the one from the cli_rc_file. Send both http and https through the proxy (e.g. for Burp Suite).
         proxy_to_use = ctx.obj['proxy']
         if not proxy_to_use:
             proxy_to_use = ctx.obj['settings']['proxy']
 
-        if uses_ssl:
-            session.proxies = {'https': proxy_to_use}
-        else:
-            session.proxies = {'http': proxy_to_use}
+        session.proxies = {'http': proxy_to_use, 'https': proxy_to_use}
 
 
 def build_raw_requests_session(ctx):
@@ -677,6 +842,20 @@ def build_config(command_args):
                                         RESOURCE_PRINCIPAL_AUTHENTICATION_TYPE]:
                 # For instance/resource principal, just fallback to empty config
                 client_config = build_empty_config()
+            elif command_args['auth'] == cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES:
+                sys.exit(
+                    "ERROR: When using --auth {}, a config file with a profile containing "
+                    "instance_certificate_file, instance_key_file, and region is required.".format(
+                        cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES
+                    )
+                )
+            elif command_args['auth'] == cli_constants.OCI_CLI_AUTH_SIGNED_JWT:
+                sys.exit(
+                    "ERROR: When using --auth {}, a config file with a profile containing "
+                    "jwt_token_file and region is required (or set OCI_CLI_JWT_TOKEN_FILE and OCI_CLI_REGION).".format(
+                        cli_constants.OCI_CLI_AUTH_SIGNED_JWT
+                    )
+                )
             else:
                 sys.exit("ERROR: " + str(e))
     if file_check:

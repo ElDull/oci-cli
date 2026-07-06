@@ -42,7 +42,7 @@ from oci_cli.service_mapping import service_mapping    # noqa: E402
 # important security information.
 logging.basicConfig(level=logging.WARN)
 
-OCI_CLI_AUTH_CHOICES = [cli_constants.OCI_CLI_AUTH_API_KEY, cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL, cli_constants.OCI_CLI_AUTH_SESSION_TOKEN, cli_constants.OCI_CLI_AUTH_INSTANCE_OBO_USER, cli_constants.OCI_CLI_AUTH_RESOURCE_PRINCIPAL, cli_constants.OCI_CLI_AUTH_OKE_WORKLOAD_IDENTITY]
+OCI_CLI_AUTH_CHOICES = [cli_constants.OCI_CLI_AUTH_API_KEY, cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL, cli_constants.OCI_CLI_AUTH_SESSION_TOKEN, cli_constants.OCI_CLI_AUTH_INSTANCE_OBO_USER, cli_constants.OCI_CLI_AUTH_RESOURCE_PRINCIPAL, cli_constants.OCI_CLI_AUTH_OKE_WORKLOAD_IDENTITY, cli_constants.OCI_CLI_AUTH_INSTANCE_PRINCIPAL_FROM_FILES, cli_constants.OCI_CLI_AUTH_SIGNED_JWT]
 
 OCI_HELP = 'Oracle Cloud Infrastructure command line interface'
 
@@ -455,11 +455,13 @@ For more information, see the Using Queries section at {cli_constants.INPUT_OUTP
 @click.option('--auth-purpose', help='The The auth purpose which can be used in conjunction with --auth.')
 @click.option('--generate-full-command-json-input', is_flag=True, is_eager=True, help=GENERATE_FULL_COMMAND_JSON_HELP)
 @click.option('--generate-param-json-input', is_eager=True, help=GENERATE_PARAM_JSON_HELP)
-@click.option('--proxy', help="""If the environment the CLI runs in requires use of a proxy server for HTTP requests, the details of the proxy server to use. Examples:
+@click.option('--proxy', help="""Send all CLI HTTP/HTTPS requests through this proxy (e.g. for debugging with Burp Suite). Examples:
 
-http://proxy.example.org:3128/ (uses proxy.example.org on port 3128)
-\b
-http://user:pass@proxy.example.org:3128/ (if your proxy requires a username and password to authenticate)""")
+http://127.0.0.1:8080 (Burp Suite default; use for inspecting or modifying requests)
+http://proxy.example.org:3128/
+http://user:pass@proxy.example.org:3128/ (proxy with authentication)
+
+Can also be set via the OCI_CLI_PROXY environment variable or the [OCI_CLI_SETTINGS] section of the CLI RC file (key: proxy).""")
 @click.option('--no-retry', is_flag=True, help='Disable retry logic for calls to services.')
 @click.option('--max-retries', type=click.INT, help='Maximum number of retry calls to be made to the service. For most commands, 7 attempts will be made. For operations with binary bodies, retries are disabled')
 @click.option('-d', '--debug', is_flag=True, help='Show additional debug information.')
@@ -531,6 +533,10 @@ def cli(ctx, config_file, profile, cli_rc_file, request_id, region, endpoint, re
         ctx.obj.update(initial_dict)
 
     load_default_values(ctx, cli_rc_file, profile)
+
+    # Proxy: allow env var to set proxy when --proxy not supplied
+    if ctx.obj.get('proxy') is None and cli_constants.OCI_CLI_PROXY_ENV_VAR in os.environ:
+        ctx.obj['proxy'] = os.environ[cli_constants.OCI_CLI_PROXY_ENV_VAR]
 
     # Show help in any case if there are no subcommands, or if the help option
     # is used but there are subcommands, then set a flag for user later.

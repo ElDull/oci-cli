@@ -7,6 +7,8 @@ from oci_cli import cli_session  # noqa: F401,E402
 from oci_cli import cli_setup  # noqa: F401
 from oci_cli import cli_setup_bootstrap  # noqa: F401
 from oci_cli import raw_request_cli  # noqa: F401
+from oci_cli import cli_whoami  # noqa: F401
+from oci_cli import cli_setup_profile_from_identity  # noqa: F401
 from interactive import cli_interactive  # noqa: F401
 
 if __name__ == '__main__':
