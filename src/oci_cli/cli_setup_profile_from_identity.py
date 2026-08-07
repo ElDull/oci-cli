@@ -28,22 +28,36 @@ extracts the tenancy OCID from the certificate, and writes a ready-to-use
 profile for --auth instance_principal_from_files to the OCI config file.
 
 \b
-Example:
+Example (individual files):
   oci setup create-profile-from-identity \\
     --cert ./cert.pem --key ./key.pem --set-region us-phoenix-1
 
+\b
+Example (directory, e.g. pull_instance_identity.py's --output-dir):
+  oci setup create-profile-from-identity \\
+    --identity-dir ./instance_identity --set-region us-phoenix-1
+
 The certificate and key must be the instance identity PEMs from an OCI compute
 instance (e.g. fetched via pull_instance_identity.py or from the instance
-metadata service at identity/cert.pem and identity/key.pem).
+metadata service at identity/cert.pem and identity/key.pem). Pass either
+--identity-dir (a directory containing cert.pem, key.pem, and optionally
+intermediate.pem) or --cert/--key/--intermediate individually, not both.
 """)
-@cli_util.option('--cert', required=True, type=click.Path(exists=True, dir_okay=False),
-                 help='Path to the instance identity certificate (cert.pem).')
-@cli_util.option('--key', required=True, type=click.Path(exists=True, dir_okay=False),
-                 help='Path to the instance identity private key (key.pem).')
+@cli_util.option('--cert', default=None, type=click.Path(exists=True, dir_okay=False),
+                 help='Path to the instance identity certificate (cert.pem). '
+                      'Mutually exclusive with --identity-dir.')
+@cli_util.option('--key', default=None, type=click.Path(exists=True, dir_okay=False),
+                 help='Path to the instance identity private key (key.pem). '
+                      'Mutually exclusive with --identity-dir.')
+@cli_util.option('--intermediate', default=None, type=click.Path(exists=True, dir_okay=False),
+                 help='Path to the intermediate certificate (intermediate.pem). Optional. '
+                      'Mutually exclusive with --identity-dir.')
+@cli_util.option('--identity-dir', default=None, type=click.Path(exists=True, file_okay=False),
+                 help='Directory containing cert.pem, key.pem, and (optionally) intermediate.pem '
+                      '-- the layout pull_instance_identity.py writes. '
+                      'Mutually exclusive with --cert/--key/--intermediate.')
 @cli_util.option('--set-region', 'profile_region', required=True,
                  help='OCI region for the profile (e.g. us-phoenix-1).')
-@cli_util.option('--intermediate', default=None, type=click.Path(exists=True, dir_okay=False),
-                 help='Path to the intermediate certificate (intermediate.pem). Optional.')
 @cli_util.option('--profile-name', default=DEFAULT_PROFILE_NAME, show_default=True,
                  help='Name for the new config profile.')
 @cli_util.option('--config-file', default=DEFAULT_CONFIG_LOCATION, show_default=True,
@@ -52,8 +66,40 @@ metadata service at identity/cert.pem and identity/key.pem).
 @cli_util.option('--force', is_flag=True, default=False,
                  help='Overwrite existing profile if it already exists.')
 @cli_util.help_option
-def create_profile_from_identity(cert, key, profile_region, intermediate, profile_name, config_file, force):
+def create_profile_from_identity(cert, key, intermediate, identity_dir, profile_region, profile_name, config_file, force):
     region = profile_region
+
+    if identity_dir and (cert or key or intermediate):
+        click.echo(
+            "ERROR: --identity-dir cannot be combined with --cert/--key/--intermediate. "
+            "Use one or the other.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if identity_dir:
+        identity_dir = os.path.abspath(os.path.expanduser(identity_dir))
+        cert = os.path.join(identity_dir, 'cert.pem')
+        key = os.path.join(identity_dir, 'key.pem')
+        found = os.listdir(identity_dir)
+        missing = [name for name, path in (('cert.pem', cert), ('key.pem', key)) if not os.path.isfile(path)]
+        if missing:
+            click.echo(
+                "ERROR: {} not found in {}. Found: {}".format(
+                    ' and '.join(missing), identity_dir, ', '.join(sorted(found)) or '(empty)'
+                ),
+                err=True,
+            )
+            sys.exit(1)
+        candidate_intermediate = os.path.join(identity_dir, 'intermediate.pem')
+        if os.path.isfile(candidate_intermediate):
+            intermediate = candidate_intermediate
+    elif not (cert and key):
+        click.echo(
+            "ERROR: either --identity-dir, or both --cert and --key, must be provided.",
+            err=True,
+        )
+        sys.exit(1)
 
     cert_path = os.path.abspath(os.path.expanduser(cert))
     key_path = os.path.abspath(os.path.expanduser(key))
