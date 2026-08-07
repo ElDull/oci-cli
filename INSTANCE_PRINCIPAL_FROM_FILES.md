@@ -21,6 +21,21 @@ region=us-phoenix-1
 
 Paths are expanded (e.g. `~` works). The certificate and key must be the **instance identity** PEMs (same as exposed at the instance metadata endpoints `identity/cert.pem` and `identity/key.pem`).
 
+### Or: generate it automatically
+
+Instead of writing the profile by hand, `oci setup create-profile-from-identity` extracts the tenancy OCID from the cert and writes the profile for you:
+
+```bash
+# Individual files:
+oci setup create-profile-from-identity --cert ./cert.pem --key ./key.pem --set-region us-phoenix-1
+
+# Or a whole directory (e.g. pull_instance_identity.py's --output-dir), auto-discovering
+# cert.pem / key.pem / intermediate.pem inside it:
+oci setup create-profile-from-identity --identity-dir ./identity --set-region us-phoenix-1
+```
+
+`--identity-dir` and `--cert`/`--key`/`--intermediate` are mutually exclusive. With `--identity-dir`, `cert.pem` and `key.pem` are required inside the directory; `intermediate.pem` is picked up automatically if present. Use `--profile-name` / `--config-file` / `--force` to control where it's written.
+
 ## Usage
 
 Use the `--auth` option and the profile that contains the above keys:
